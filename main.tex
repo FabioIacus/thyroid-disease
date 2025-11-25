@@ -1,0 +1,436 @@
+\documentclass[a4paper,11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage{geometry}
+\usepackage{float}
+\geometry{margin=2.5cm}
+
+\title{Comparative Study of Classification Algorithms\\
+on the ANN-Thyroid Dataset}
+\author{Fabio Iacus \\ 2254421}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Introduction and motivation}
+
+The goal of this project is to compare several classical supervised learning algorithms on a real--world classification problem.
+Rather than focusing on a single model, the emphasis is on understanding how different modeling assumptions interact with the data distribution, and how this affects predictive performance, robustness to class imbalance, computational cost, and overfitting.
+
+A medical diagnosis problem is considered: predicting thyroid condition from laboratory measurements.
+This task is clinically relevant (detecting abnormal thyroid function) and statistically challenging because the dataset is highly imbalanced: the vast majority of patients are healthy, and only a small fraction belong to the diseased (pathological) classes.
+Such a setting is interesting for model comparison because simple accuracy can be misleading.
+More informative metrics such as macro--averaged precision, recall and F$_1$ have to be considered.
+
+Macro--F$_1$ is the average of the F$_1$ scores computed for each class; it summarizes how well the model performs on all classes, giving the same importance to both frequent and rare classes.
+
+The assignment requires training and evaluating several standard classifiers:
+Gaussian Naive Bayes, softmax regression, decision tree, random forest and support vector machines (SVMs).
+All models are trained on the same preprocessed data, tuned via cross--validation, and evaluated with a common set of metrics.
+The final aim is to draw conclusions about which approaches work best on this task and why, and to discuss the effect of model assumptions and regularization on overfitting.
+
+\section{Dataset description}
+
+\subsection{Source and prediction task}
+
+The dataset used in this project is the \emph{ANN--Thyroid} dataset from the Thyroid Disease collection of the UCI Machine Learning Repository.
+It describes patients undergoing thyroid tests and is commonly used as a benchmark for multiclass classification.
+
+Each instance corresponds to a patient and is represented by 21 input features describing various clinical and laboratory measurements (a mix of binary indicators and continuous values).
+The target variable is a three--class label:
+\begin{itemize}
+  \item class 1: hyperthyroid,
+  \item class 2: subnormal,
+  \item class 3: normal.
+\end{itemize}
+The task is therefore a three--class classification problem, where the goal is to predict the correct class given the input features.
+
+\subsection{Size and class imbalance}
+
+The original ANN--Thyroid dataset is provided in two files (train and test) for a total of 7200 raw instances.
+After loading the two splits and applying the cleaning steps described in Section~\ref{sec:preprocessing}, the following is obtained:
+\begin{itemize}
+  \item 7200 raw samples,
+  \item 7129 samples after cleaning,
+  \item 21 input features actually used by the models.
+\end{itemize}
+
+The label distribution on the cleaned dataset is extremely imbalanced:
+\begin{itemize}
+  \item class 1: 166 examples (2.33\%),
+  \item class 2: 368 examples (5.16\%),
+  \item class 3: 6595 examples (92.51\%).
+\end{itemize}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.6\textwidth]{class_distribution.png}
+  \caption{Class distribution in the cleaned ANN--Thyroid dataset. The normal class (class 3) largely dominates, while the two pathological classes (class 1 and 2) are rare.}
+  \label{fig:class_distribution}
+\end{figure}
+
+Thus, a majority--class baseline that always predicts ``normal'' would already achieve about 92.5\% accuracy, while completely failing to detect hyperthyroid or subnormal patients.
+For this reason, the analysis relies heavily on macro--averaged metrics (macro precision, macro recall, macro F$_1$) that weigh the three classes equally.
+
+\section{Methodology and models}
+\label{sec:methodology}
+
+\subsection{Data preprocessing}
+\label{sec:preprocessing}
+
+\paragraph{Loading and cleaning.}
+The two UCI files are loaded and concatenated into a single \texttt{pandas} DataFrame.
+Missing values are encoded in the original files as the character ``\texttt{?}'', which is passed to \texttt{read\_csv} so that they are parsed as \texttt{NaN}.
+All feature columns are then converted to numeric types; non--parseable values become \texttt{NaN} and are removed.
+
+After conversion, two cleaning steps are enforced:
+\begin{enumerate}
+  \item rows containing any missing value are dropped;
+  \item duplicate rows are removed.
+\end{enumerate}
+Assertions in the code check that there are no remaining \texttt{NaN} values in the feature matrix and labels.
+
+\paragraph{Label encoding.}
+The original labels are integers $\{1,2,3\}$.
+This numeric encoding is kept for modeling and a human--readable column with string labels (``hyperthyroid'', ``subnormal'', ``normal'') is sometimes also created for analysis and plotting.
+The additional string column is not used as a feature.
+
+\paragraph{Exploratory data analysis.}
+Before training any model, a basic exploratory data analysis (EDA) is performed.
+Descriptive statistics are computed for all features and the following visualizations are produced:
+\begin{itemize}
+  \item histograms of all feature distributions;
+  \item a correlation heatmap of the features (and the label).
+\end{itemize}
+The histograms show that many features are effectively binary with a strong skew towards zero (rare events or flags), while a subset of continuous features (roughly features $x_{17}$ to $x_{21}$) exhibit more informative variation.
+The correlation heatmap confirms that some of these continuous features are strongly correlated with the label, suggesting they may play a dominant role in classification.
+
+\paragraph{Feature scaling and selection.}
+The input features are standardized using \texttt{StandardScaler} (zero mean, unit variance) for models that are sensitive to the scale of the inputs:
+softmax regression, linear SVM and RBF SVM.
+Tree--based models (decision tree and random forest) are invariant to monotonic transformations of individual features, so their inputs are intentionally not scaled.
+
+For softmax regression and linear SVM a supervised feature selection step is included using \texttt{SelectKBest} with the ANOVA F--test (\texttt{f\_classif}).
+The hyperparameter $k$ (number of selected features) is tuned via cross--validation.
+Feature selection is preferred over PCA because:
+\begin{itemize}
+  \item the dimensionality is modest (21 features), so there is no pressing need to compress the data;
+  \item feature selection keeps the original features and thus preserves interpretability;
+  \item the ANOVA F--test is supervised and can focus on features that are actually discriminative for the target classes.
+\end{itemize}
+
+\subsection{Train--validation--test split}
+
+After cleaning, the data is split into three disjoint sets:
+\begin{itemize}
+  \item training set: 60\% (4277 samples),
+  \item validation set: 20\% (1426 samples),
+  \item test set: 20\% (1426 samples).
+\end{itemize}
+The split is performed using \texttt{train\_test\_split} twice: first train+validation vs.\ test, then train vs.\ validation.
+Stratified splitting is used so that the class proportions are preserved in all three subsets, which is crucial given the strong imbalance.
+\texttt{random\_state = 42} is fixed to ensure reproducibility.
+
+In this setting, the models are first trained on the training set, where they learn the relationship between the laboratory measurements and the thyroid condition.
+After training and model selection, the final models are evaluated on a separate test set: given only the input features of previously unseen patients, they must predict the correct class, effectively deciding whether each patient is healthy or belongs to one of the pathological classes.
+
+A 60/20/20 split is a reasonable compromise for this dataset: a relatively large training set (more than 4000 samples) is still retained while devoting 20\% of the data to an unbiased final test set and 20\% to validation.
+Alternative splits (e.g., 70/15/15 or 80/10/10) would also be possible, but a sizable validation set is preferred to obtain stable estimates of macro--F$_1$ when tuning hyperparameters.
+
+\subsection{Models}
+
+The following models are trained, all implemented using \texttt{scikit--learn}.
+
+\paragraph{Gaussian Naive Bayes.}
+Gaussian Naive Bayes assumes that, conditioned on the class $y$, all features are independent and follow a univariate normal distribution:
+\[
+p(x \mid y) = \prod_{j=1}^d \mathcal{N}(x_j \mid \mu_{j,y}, \sigma^2_{j,y}).
+\]
+This is a very strong assumption in this setting: many features are binary, and several continuous features are correlated.
+Nevertheless, Naive Bayes is a useful baseline because it is extremely fast and requires almost no hyperparameter tuning.
+Only the \texttt{var\_smoothing} parameter controlling additive variance is tuned.
+
+\paragraph{Softmax regression.}
+Softmax regression (multinomial logistic regression) generalizes logistic regression to multiclass problems with linear decision boundaries.
+In multinomial (softmax) regression, the conditional class probabilities are modeled as
+\[
+p(y = k \mid x) =
+\frac{\exp(w_k^\top x + b_k)}
+     {\sum_{\ell=1}^{K} \exp(w_\ell^\top x + b_\ell)},
+\qquad k = 1, \dots, K,
+\]
+where $w_k$ and $b_k$ are the parameters associated with class $k$. The predicted class is
+\[
+\hat{y}(x) = \arg\max_{k} \, p(y = k \mid x).
+\]
+The model uses $\ell_2$ regularization, and the hyperparameters tuned are the inverse regularization strength $C$, the class weighting strategy (\texttt{None} vs.\ \texttt{balanced}), and the number of selected features $k$ in the \texttt{SelectKBest} step.
+Inputs are standardized.
+
+\paragraph{Decision tree.}
+A CART (Classification And Regression Trees) decision tree classifier with the default Gini impurity criterion is used.
+The maximum depth of the tree and the minimum number of samples required to split an internal node are tuned.
+A shallow tree acts as a regularized model, while deeper trees can overfit.
+The tree naturally handles a mix of binary and continuous features and does not require scaling.
+
+\paragraph{Random forest.}
+Random forest is an ensemble of decision trees trained on bootstrap resamples of the data with random feature selection at each split.
+This reduces variance and typically improves generalization compared to a single tree, at the cost of higher computation and lower interpretability.
+The number of trees, the maximum depth and the minimum number of samples to split a node are tuned.
+
+\paragraph{Linear SVM.}
+The linear SVM learns a set of linear separating hyperplanes with maximum margin.
+A linear SVM learns a decision function of the form
+\[
+f(x) = \operatorname{sign}(w^\top x + b),
+\]
+where the parameters $(w,b)$ are obtained by solving the regularized maximum--margin optimization problem
+\[
+\min_{w,b,\xi} \;
+\frac{1}{2} \|w\|_2^2 + C \sum_{i=1}^{n} \xi_i
+\quad \text{subject to} \quad
+y_i (w^\top x_i + b) \ge 1 - \xi_i,\; \xi_i \ge 0,\; i = 1,\dots,n.
+\]
+In the multiclass setting, one linear SVM is trained for each class in a one--vs--rest scheme, and the predicted label is obtained by selecting the class with the largest decision value.
+The \texttt{SVC} implementation with linear kernel is used, enabling probability estimates.
+It is combined with \texttt{StandardScaler} and \texttt{SelectKBest}, and the regularization parameter $C$, the class weighting strategy, and the number of selected features are tuned.
+
+\paragraph{RBF SVM.}
+The RBF SVM uses a Gaussian kernel to model non--linear decision boundaries in the original feature space.
+Both the regularization parameter $C$ and the kernel width parameter $\gamma$ are tuned.
+This model is more flexible but also more prone to overfitting and is computationally more expensive, especially under cross--validation.
+
+\subsection{Hyperparameter tuning and evaluation protocol}
+
+For each model a \texttt{Pipeline} object is constructed (combining scaling, optional feature selection, and the classifier) and grid search hyperparameter tuning is performed with \texttt{GridSearchCV}.
+Stratified 5--fold cross--validation is used on the training set, with folds defined by \texttt{StratifiedKFold} (shuffle enabled and \texttt{random\_state = 42}).
+
+The grid search optimizes two metrics on the validation folds:
+accuracy and macro--averaged F$_1$.
+The parameter \texttt{refit} is set to \texttt{'f1m'} so that the final model is refit on the full training set using the hyperparameters that maximize macro--F$_1$.
+This choice directly addresses the class imbalance, since macro--F$_1$ gives equal importance to the three classes.
+
+For each refitted model the following metrics are then computed on the validation and test sets:
+\begin{itemize}
+  \item accuracy,
+  \item macro--averaged precision,
+  \item macro--averaged recall,
+  \item macro--averaged F$_1$.
+\end{itemize}
+Training time (grid search wall--clock time) is also recorded as a proxy for computational cost.
+
+To gain further insight, the following are generated:
+\begin{itemize}
+  \item confusion matrices on validation and test sets;
+  \item ROC curves and macro ROC--AUC (one--vs--rest scheme) on the validation set;
+  \item learning curves (training vs.\ cross--validated F$_1$ as a function of training set size) for the two best models;
+  \item feature importance plots for the decision tree and a permutation importance analysis.
+\end{itemize}
+
+Finally, to visualize decision boundaries, PCA with two components is applied to the standardized features and an RBF SVM is trained in this two--dimensional space.
+The resulting plot is only a visualization tool and does not affect the main models, which are trained in the original 21--dimensional space.
+
+\section{Results and analysis}
+
+\subsection{Global quantitative comparison}
+
+Table~\ref{tab:perf} summarizes the main performance metrics for all models.
+Values are reported for the validation and test sets.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcccc}
+\toprule
+Model & Val.\ acc. & Val.\ macro--F$_1$ & Test acc. & Test macro--F$_1$ \\
+\midrule
+Gaussian Naive Bayes   & 0.11 & 0.10 & 0.12 & 0.12 \\
+Softmax regression     & 0.97 & 0.86 & 0.97 & 0.86 \\
+Decision tree          & 0.996 & 0.973 & 0.996 & 0.980 \\
+Random forest          & 0.994 & 0.963 & 0.998 & 0.985 \\
+Linear SVM             & 0.970 & 0.848 & 0.967 & 0.841 \\
+RBF SVM                & 0.949 & 0.790 & 0.954 & 0.823 \\
+\bottomrule
+\end{tabular}
+\caption{Validation and test performance of all models.}
+\label{tab:perf}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.7\textwidth]{model_macro_f1_test.png}
+  \caption{Test macro--F$_1$ scores for all evaluated models. Decision tree and random forest achieve the highest macro--F$_1$, while Gaussian Naive Bayes performs significantly worse than the other methods.}
+  \label{fig:model_macro_f1_test}
+\end{figure}
+
+All models except Naive Bayes significantly outperform the majority--class baseline in terms of macro--F$_1$.
+Decision tree and random forest achieve the best overall performance:
+both reach very high accuracy and macro--F$_1$ on validation and test sets, with random forest slightly outperforming the single tree on test macro--F$_1$.
+Softmax regression and linear SVM form a second tier of strong models, while the RBF SVM is slightly worse in terms of macro--F$_1$ despite high accuracy.
+Gaussian Naive Bayes performs extremely poorly, even below the majority baseline in terms of accuracy.
+
+Macro ROC--AUC scores on the validation set further confirm this picture:
+Gaussian Naive Bayes reaches only about 0.73, while all other models exceed 0.98, with random forest around 0.999 and linear SVM around 0.995.
+
+\subsection{Effect of class imbalance and metric choice}
+
+Because the dataset is so imbalanced, accuracy alone can be misleading.
+For example, softmax regression, linear SVM and RBF SVM all attain validation accuracies between 0.95 and 0.97, not much lower than the tree--based models.
+However, their macro--F$_1$ scores are clearly lower than those of the decision tree and random forest.
+This indicates that, although these linear or kernel methods classify the majority class very well, they make more mistakes on the minority classes.
+
+The confusion matrices support this interpretation.
+For softmax regression on the test set, most normal patients (class 3) are correctly classified, but there are non--negligible misclassifications from the normal class into the two abnormal classes and vice versa.
+The tree--based models, in contrast, produce confusion matrices that are almost perfectly diagonal: for the decision tree, only a handful of examples in each class are misclassified.
+Random forest is even closer to a perfect classifier.
+
+Macro--averaged metrics give equal weight to all three classes and are thus more appropriate here.
+The fact that the decision tree and random forest achieve macro--F$_1$ above 0.97 while maintaining high precision and recall for each class shows that they are able to correctly detect hyperthyroid and subnormal patients as well as normal ones.
+
+\subsection{Why Gaussian Naive Bayes fails}
+
+Gaussian Naive Bayes performs dramatically worse than all other models, with macro--F$_1$ around 0.10 and accuracy around 0.12 on both validation and test sets.
+The confusion matrices show that the model essentially fails to learn a meaningful decision rule: it heavily misclassifies examples from all three classes and often predicts the wrong class even for the majority class.
+
+There are several reasons for this:
+\begin{itemize}
+  \item The conditional independence assumption is unrealistic for this dataset.
+  Many features are correlated, particularly the continuous ones that are strongly related to the label.
+  \item The Gaussian assumption is also problematic.
+  Some features are binary or highly skewed, and their distribution within each class is far from normal.
+  \item Because the classes are imbalanced, miscalibrated likelihoods can easily push the posterior probabilities in the wrong direction, causing the maximum a posteriori classifier to systematically prefer the wrong class.
+\end{itemize}
+Interestingly, the macro ROC--AUC for Naive Bayes is about 0.73, which suggests that the model has some rank--ordering ability (its scores are not completely random), but the standard decision rule and the violation of assumptions lead to very poor discrete predictions.
+
+\subsection{Linear models: softmax regression and linear SVM}
+
+Softmax regression and linear SVM perform much better than Naive Bayes and constitute strong baselines.
+Softmax regression achieves test accuracy around 0.97 and test macro--F$_1$ around 0.86.
+The confusion matrix shows that it correctly identifies the majority of hyperthyroid and subnormal patients, thanks in part to the use of class weights and macro--F$_1$ as the tuning metric.
+However, performance on the minority classes is still not as good as for the tree--based models.
+
+The linear SVM has similar accuracy and slightly lower macro--F$_1$ than softmax regression.
+Its precision is generally higher while recall is lower, reflecting the margin--maximization bias: the SVM tends to prefer confident decisions, sometimes at the cost of missing some minority--class examples.
+Macro ROC--AUC is very high (around 0.995), indicating that the model's scores are well separated, but the fixed class--independent threshold leads to a trade--off between precision and recall.
+
+Overall, these models show that linear decision boundaries, combined with proper regularization and class weighting, can handle the task reasonably well.
+However, the underlying relationship between features and thyroid status appears to be non--linear, so more flexible models can exploit additional structure.
+
+\subsection{Tree--based models: decision tree and random forest}
+
+The decision tree is one of the best performing models in this comparison, with validation macro--F$_1$ around 0.97 and test macro--F$_1$ around 0.98.
+The optimal tree, selected by cross--validation, has a maximum depth of 5 and a relatively large minimum number of samples per split, which acts as an effective regularizer.
+The confusion matrices on validation and test sets are almost perfectly diagonal: there are only a few misclassified examples in each class.
+Macro ROC--AUC is close to 0.99.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.6\textwidth]{cm_test_RandomForest.png}
+  \caption{Confusion matrix of the random forest classifier on the test set. The matrix is almost perfectly diagonal, indicating that the model correctly classifies almost all patients in each class, including the rare pathological classes.}
+  \label{fig:confusion_matrix_rf_test}
+\end{figure}
+
+Feature importance analysis reveals that the tree heavily relies on a small subset of features, in particular features $x_{17}$ and $x_{21}$, which together account for most of the total importance.
+This aligns with the EDA, where these features showed strong correlation with the label.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.7\textwidth]{featimp_decisiontree_top10.png}
+  \caption{Top 10 feature importances for the decision tree classifier. Features $x_{17}$ and $x_{21}$ dominate, in agreement with the exploratory correlation analysis.}
+  \label{fig:featimp_decisiontree}
+\end{figure}
+
+The tree structure is therefore interpretable: it essentially partitions the space based on thresholding a few key continuous measurements.
+
+The random forest further improves upon the single tree, achieving test accuracy of about 0.998 and test macro--F$_1$ of about 0.985.
+Training macro--F$_1$ is exactly 1.0, indicating that the forest fits the training data perfectly, but validation macro--F$_1$ remains very high, so overfitting is limited.
+Macro ROC--AUC is extremely high (around 0.999).
+
+The learning curves for both the decision tree and the random forest show that:
+\begin{itemize}
+  \item training F$_1$ is close to 1 even for small training sizes, especially for the random forest;
+  \item cross--validated F$_1$ increases with the number of training samples and stabilizes at high values;
+  \item the gap between training and validation F$_1$ decreases as more data are used, suggesting that additional data would further reduce variance.
+\end{itemize}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.7\textwidth]{lc_RandomForest.png}
+  \caption{Learning curve of the random forest classifier, showing training and cross--validated macro--F$_1$ as a function of the training set size. The gap between training and validation performance decreases as more data are used, indicating reduced overfitting and improved generalization.}
+  \label{fig:learning_curve_rf}
+\end{figure}
+
+The main drawback of the random forest is computational cost.
+Grid search for the forest took around 52 seconds, compared to about half a second for the single decision tree.
+Thus, the choice between tree and forest depends on whether the small gain in macro--F$_1$ justifies the higher training time and reduced interpretability.
+
+\subsection{RBF SVM and decision boundaries}
+
+The RBF SVM is the most flexible model in this comparison but does not outperform the simpler tree--based models.
+Its test macro--F$_1$ is around 0.82, significantly lower than the decision tree and random forest, although accuracy and ROC--AUC are high.
+This suggests that the model is somewhat overfitting or is not perfectly tuned under the strong class imbalance.
+Grid search for the RBF SVM is also the most expensive, taking more than 170 seconds.
+
+To visualize the geometry of the learned decision function, the standardized features are projected onto two principal components using PCA and an RBF SVM is trained in this two--dimensional space.
+The resulting plot shows three relatively well--separated clusters, with decision regions that nicely wrap around them.
+This confirms that the classes are linearly separable in a suitable non--linear feature space.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.65\textwidth]{decision_boundary_SVM_RBF_su_PCA(2).png}
+  \caption{Decision regions of an RBF SVM trained on the first two principal components of the standardized features. The three classes form well--separated clusters in this 2D projection, and the non--linear decision boundaries wrap around them.}
+  \label{fig:decision_boundary_pca_svm}
+\end{figure}
+
+However, in the full 21--dimensional space and under class imbalance, the RBF SVM does not provide a significant advantage over tree ensembles.
+
+\subsection{Computational cost and training time}
+
+Besides predictive performance, the models differ substantially in computational cost.
+All training times reported below include the full grid--search procedure (5--fold cross--validation over all hyperparameter combinations) and were measured on the same Colab environment, so they are directly comparable.
+
+In terms of wall--clock time:
+\begin{itemize}
+  \item decision tree and Gaussian Naive Bayes are extremely fast (below 1 second and around 5 seconds respectively);
+  \item softmax regression is also relatively fast (around 4 seconds);
+  \item random forest requires significantly more time (around 52 seconds);
+  \item linear SVM is slower (around 88 seconds), and RBF SVM is by far the slowest model (around 173 seconds).
+\end{itemize}
+
+These differences reflect the underlying computational complexity of the algorithms. 
+Gaussian Naive Bayes and the decision tree have simple training procedures that scale almost linearly with the number of samples and features, and they involve no expensive optimization; as a result, they remain cheap even under cross--validation.
+Softmax regression requires solving a convex optimization problem but on a relatively low--dimensional parametric model, so the cost is still moderate.
+
+Random forest and SVMs are more demanding.
+The random forest trains many decision trees on bootstrap samples, so its cost grows roughly linearly in the number of trees and in the depth of each tree, multiplied by the number of grid--search configurations.
+Linear and especially RBF SVM rely on iterative quadratic optimization; for the RBF SVM, the kernel operations make the cost grow faster than linearly with the number of samples, and this is further amplified by the need to search over both $C$ and $\gamma$.
+Given that the decision tree and random forest already achieve near--perfect performance on this dataset, the additional computational cost of linear and RBF SVMs is not justified in this specific application.
+
+\section{Conclusion}
+
+In this project a comparative study of several classical supervised learning algorithms on the ANN--Thyroid dataset was performed.
+The analysis followed a common pipeline: data cleaning, exploratory analysis, standardized train--validation--test split, model--specific preprocessing, hyperparameter tuning via stratified cross--validation, and evaluation with metrics robust to class imbalance.
+
+The key findings are:
+\begin{itemize}
+  \item Model assumptions matter.
+  Gaussian Naive Bayes, which assumes conditional independence and Gaussian feature distributions, performs extremely poorly because these assumptions are strongly violated.
+  \item Linear models (softmax regression and linear SVM) provide strong and computationally efficient baselines, achieving high accuracy and reasonable macro--F$_1$.
+  However, they are less effective on the minority classes than more flexible models.
+  \item Tree--based models, especially the decision tree and random forest, achieve the best performance, with macro--F$_1$ above 0.97 and almost perfectly diagonal confusion matrices.
+  They naturally handle mixed binary and continuous features and capture non--linear interactions.
+  \item Random forest slightly outperforms a single shallow decision tree but at a higher computational cost and with reduced interpretability.
+  Depending on the application, the single tree may be preferable as a compact, interpretable model with already excellent performance.
+  \item The strong class imbalance necessitates the use of macro--averaged metrics and ROC--AUC; simple accuracy would mask differences between models and could be dominated by the majority class.
+\end{itemize}
+
+Overall, this assignment illustrates how different modeling choices and assumptions behave on a real, imbalanced medical dataset.
+It highlights the importance of careful preprocessing, appropriate evaluation metrics, and cross--validated hyperparameter tuning.
+Most importantly, it shows that combining simple, well--understood models with a rigorous experimental protocol can already yield state--of--the--art performance on challenging real--world tasks.
+
+\end{document}
