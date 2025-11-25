@@ -115,6 +115,4 @@ Option 2 – Local environment
 ## License / usage
 
 This repository is intended for educational purposes as part of a Machine Learning course assignment.
-Please check the course rules before reusing or publishing this code as part of other assignments or exams.
-
 The ANN-Thyroid dataset is provided by the UCI Machine Learning Repository and is subject to their terms of use.
